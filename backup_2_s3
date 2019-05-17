@@ -1,0 +1,52 @@
+SHELL=/bin/sh
+LOGFILE="/var/log/dailybackp-s3.log"
+date=$(date +"%d-%b-%Y")
+db=mysql-$date.sql.gz
+mdb=mongo-$date.zip
+mongo="/backup/mongodump/"
+backup_path="/backup/daily"
+WEBROOT="/var/www"
+
+s3bucket="Name Of The S3 Bucket"
+echo "\n zipping the documet root of web files using tar " >> $LOGFILE
+
+
+   for vhost in "$WEBROOT"/*; do
+   test -d "$vhost" || continue
+   base=$(basename "$vhost")
+   cd "$WEBROOT" && tar -czf "$backup_path/webroot/$(date +%F)_$base.tar.gz" "$base"
+
+echo "\n Processing DB backup" >> $LOGFILE
+#MYSQL-DUMP
+mysqldump -u root -4YKhLLGLMtnzZwMg --all-databases | tar -zcvf > ${backup_path}/${db}.tar.gz
+
+#MONGO-DUMP
+/usr/bin/mongodump --out /${mongo}
+zip -r ${backup_path}/${mdb} /${mongo}
+if [ -e ${backup_path}/${db} ]; then
+
+# copy the current S3 files to new DIR
+aws s3 cp s3://${s3bucket}/latestfiles s3://${s3bucket}/www-$date --recursive
+
+# Sync Webfiles to S3
+	aws s3 sync $backup_path/webroot/ s3://${s3bucket}/latestfiles/ --delete
+# MySql pload
+	aws s3 cp ${backup_path}/${db} s3://${s3bucket}/mysql/${db}
+# Mongo Upload
+	aws s3 cp ${backup_path}/${mdb} s3://${s3bucket}/mongo/${mdb}
+  	if [ "$?" -ne "0" ]; then
+    	echo "Upload to AWS failed" >> $LOGFILE
+mail -s 'Backup Faild' abc@mail.com < /dev/null
+    	exit 1
+  	fi
+	# If success, remove backup file
+	rm ${backup_path}/${db}
+	rm ${backup_path}/${mdb}
+	rm ${backup_path}/webroot/*.tar.gz
+	exit 0
+fi
+echo "Backup Faild" >> $LOGFILE
+mail -s 'Backup Faild' abc@mail.com < /dev/null
+exit 1
+
+
